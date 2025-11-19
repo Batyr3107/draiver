@@ -38,6 +38,47 @@ enum PaymentStatus {
   REFUNDED
 }
 
+enum LocationType {
+  HOME
+  WORK
+  FAVORITE
+}
+
+enum LoyaltyTier {
+  BRONZE
+  SILVER
+  GOLD
+  PLATINUM
+}
+
+enum NotificationType {
+  RIDE_REQUEST
+  BID_RECEIVED
+  BID_ACCEPTED
+  RIDE_STARTED
+  RIDE_COMPLETED
+  PAYMENT_RECEIVED
+  PROMO_CODE
+  ACHIEVEMENT
+  MESSAGE
+  SYSTEM
+}
+
+enum AchievementType {
+  FIRST_RIDE
+  RIDES_10
+  RIDES_50
+  RIDES_100
+  RIDES_500
+  FIVE_STAR_DRIVER
+  FIVE_STAR_PASSENGER
+  EARLY_BIRD
+  NIGHT_OWL
+  WEEKEND_WARRIOR
+  REFERRAL_MASTER
+  LOYALTY_MEMBER
+}
+
 model User {
   id            String   @id @default(uuid())
   phoneNumber   String   @unique
@@ -49,18 +90,36 @@ model User {
   avatar        String?
   rating        Float?   @default(5.0)
   totalRides    Int      @default(0)
+
+  // Премиум функции
+  loyaltyTier   LoyaltyTier @default(BRONZE)
+  loyaltyPoints Int         @default(0)
+  referralCode  String      @unique @default(cuid())
+  referredById  String?
+  referredBy    User?       @relation("Referrals", fields: [referredById], references: [id])
+
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
   // Связи
-  passengerRides Ride[]         @relation("PassengerRides")
-  driverProfile  DriverProfile?
-  bids           Bid[]
-  reviews        Review[]       @relation("ReviewsGiven")
-  receivedReviews Review[]      @relation("ReviewsReceived")
+  passengerRides    Ride[]            @relation("PassengerRides")
+  driverProfile     DriverProfile?
+  bids              Bid[]
+  reviews           Review[]          @relation("ReviewsGiven")
+  receivedReviews   Review[]          @relation("ReviewsReceived")
+  savedLocations    SavedLocation[]
+  referrals         User[]            @relation("Referrals")
+  tips              Tip[]
+  promoCodesUsed    PromoCodeUsage[]
+  achievements      UserAchievement[]
+  notifications     Notification[]
+  sentMessages      Message[]         @relation("SentMessages")
+  receivedMessages  Message[]         @relation("ReceivedMessages")
 
   @@index([phoneNumber])
   @@index([email])
+  @@index([referralCode])
+  @@index([loyaltyTier])
 }
 
 model DriverProfile {
@@ -119,6 +178,7 @@ model Ride {
 
   // Время
   requestedAt       DateTime    @default(now())
+  scheduledFor      DateTime?   // Запланированная поездка
   acceptedAt        DateTime?
   startedAt         DateTime?
   completedAt       DateTime?
@@ -127,11 +187,15 @@ model Ride {
   // Дополнительная информация
   passengerNotes    String?
   driverNotes       String?
+  promoCodeId       String?
 
   // Связи
   bids              Bid[]
   payment           Payment?
   review            Review?
+  tip               Tip?
+  promoCode         PromoCode?  @relation(fields: [promoCodeId], references: [id])
+  messages          Message[]
 
   createdAt         DateTime    @default(now())
   updatedAt         DateTime    @updatedAt
@@ -140,6 +204,7 @@ model Ride {
   @@index([driverId])
   @@index([status])
   @@index([requestedAt])
+  @@index([scheduledFor])
 }
 
 model Bid {
@@ -207,4 +272,160 @@ model Review {
   @@index([rideId])
   @@index([reviewerId])
   @@index([reviewedId])
+}
+
+// 🏠 Избранные адреса
+model SavedLocation {
+  id          String       @id @default(uuid())
+  userId      String
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type        LocationType
+  name        String       // "Дом", "Работа", "Спортзал" и т.д.
+  address     String
+  latitude    Float
+  longitude   Float
+
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@unique([userId, type])
+  @@index([userId])
+}
+
+// 🎫 Промокоды
+model PromoCode {
+  id            String           @id @default(uuid())
+  code          String           @unique
+  description   String?
+
+  discountType  String           // "PERCENTAGE" или "FIXED"
+  discountValue Float            // Процент (0-100) или фиксированная сумма
+
+  maxUses       Int?             // Максимальное количество использований
+  maxUsesPerUser Int             @default(1)
+
+  validFrom     DateTime
+  validUntil    DateTime
+
+  isActive      Boolean          @default(true)
+
+  rides         Ride[]
+  usages        PromoCodeUsage[]
+
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  @@index([code])
+  @@index([validFrom, validUntil])
+}
+
+model PromoCodeUsage {
+  id          String    @id @default(uuid())
+
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+
+  promoCodeId String
+  promoCode   PromoCode @relation(fields: [promoCodeId], references: [id])
+
+  usedAt      DateTime  @default(now())
+
+  @@unique([userId, promoCodeId])
+  @@index([userId])
+  @@index([promoCodeId])
+}
+
+// 💰 Чаевые
+model Tip {
+  id        String   @id @default(uuid())
+
+  rideId    String   @unique
+  ride      Ride     @relation(fields: [rideId], references: [id])
+
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+
+  amount    Float
+  message   String?
+
+  createdAt DateTime @default(now())
+
+  @@index([rideId])
+  @@index([userId])
+}
+
+// 🏆 Достижения
+model Achievement {
+  id          String            @id @default(uuid())
+
+  type        AchievementType   @unique
+  name        String
+  description String
+  icon        String
+  points      Int               @default(0)
+
+  users       UserAchievement[]
+
+  createdAt   DateTime          @default(now())
+}
+
+model UserAchievement {
+  id            String      @id @default(uuid())
+
+  userId        String
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  achievementId String
+  achievement   Achievement @relation(fields: [achievementId], references: [id])
+
+  unlockedAt    DateTime    @default(now())
+
+  @@unique([userId, achievementId])
+  @@index([userId])
+  @@index([achievementId])
+}
+
+// 🔔 Уведомления
+model Notification {
+  id        String           @id @default(uuid())
+
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type      NotificationType
+  title     String
+  message   String
+  data      Json?            // Дополнительные данные (ID поездки и т.д.)
+
+  isRead    Boolean          @default(false)
+
+  createdAt DateTime         @default(now())
+
+  @@index([userId, isRead])
+  @@index([createdAt])
+}
+
+// 💬 Чат между водителем и пассажиром
+model Message {
+  id         String   @id @default(uuid())
+
+  rideId     String
+  ride       Ride     @relation(fields: [rideId], references: [id], onDelete: Cascade)
+
+  senderId   String
+  sender     User     @relation("SentMessages", fields: [senderId], references: [id])
+
+  receiverId String
+  receiver   User     @relation("ReceivedMessages", fields: [receiverId], references: [id])
+
+  content    String
+  isRead     Boolean  @default(false)
+
+  createdAt  DateTime @default(now())
+
+  @@index([rideId])
+  @@index([senderId])
+  @@index([receiverId])
+  @@index([createdAt])
 }
