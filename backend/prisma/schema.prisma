@@ -1,0 +1,210 @@
+// Prisma Schema для Draiver
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  PASSENGER
+  DRIVER
+  ADMIN
+}
+
+enum RideStatus {
+  REQUESTED      // Пассажир создал заявку
+  BIDDING        // Водители делают предложения
+  ACCEPTED       // Пассажир принял предложение
+  DRIVER_ARRIVED // Водитель прибыл
+  IN_PROGRESS    // Поездка началась
+  COMPLETED      // Поездка завершена
+  CANCELLED      // Отменена
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  WALLET
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+model User {
+  id            String   @id @default(uuid())
+  phoneNumber   String   @unique
+  email         String?  @unique
+  password      String
+  firstName     String
+  lastName      String
+  role          UserRole @default(PASSENGER)
+  avatar        String?
+  rating        Float?   @default(5.0)
+  totalRides    Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Связи
+  passengerRides Ride[]         @relation("PassengerRides")
+  driverProfile  DriverProfile?
+  bids           Bid[]
+  reviews        Review[]       @relation("ReviewsGiven")
+  receivedReviews Review[]      @relation("ReviewsReceived")
+
+  @@index([phoneNumber])
+  @@index([email])
+}
+
+model DriverProfile {
+  id                String   @id @default(uuid())
+  userId            String   @unique
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  licenseNumber     String   @unique
+  vehicleBrand      String
+  vehicleModel      String
+  vehicleYear       Int
+  vehicleColor      String
+  vehiclePlate      String   @unique
+  vehiclePhoto      String?
+
+  isAvailable       Boolean  @default(false)
+  isVerified        Boolean  @default(false)
+  currentLatitude   Float?
+  currentLongitude  Float?
+
+  rides             Ride[]   @relation("DriverRides")
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([userId])
+  @@index([isAvailable])
+}
+
+model Ride {
+  id                String      @id @default(uuid())
+
+  // Пассажир
+  passengerId       String
+  passenger         User        @relation("PassengerRides", fields: [passengerId], references: [id])
+
+  // Водитель (может быть null до принятия заявки)
+  driverId          String?
+  driver            DriverProfile? @relation("DriverRides", fields: [driverId], references: [id])
+
+  // Маршрут
+  pickupAddress     String
+  pickupLatitude    Float
+  pickupLongitude   Float
+  dropoffAddress    String
+  dropoffLatitude   Float
+  dropoffLongitude  Float
+
+  // Цена и статус
+  suggestedPrice    Float?      // Предложенная пассажиром цена
+  finalPrice        Float?      // Финальная согласованная цена
+  distance          Float?      // В километрах
+  duration          Int?        // Примерное время в минутах
+
+  status            RideStatus  @default(REQUESTED)
+
+  // Время
+  requestedAt       DateTime    @default(now())
+  acceptedAt        DateTime?
+  startedAt         DateTime?
+  completedAt       DateTime?
+  cancelledAt       DateTime?
+
+  // Дополнительная информация
+  passengerNotes    String?
+  driverNotes       String?
+
+  // Связи
+  bids              Bid[]
+  payment           Payment?
+  review            Review?
+
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  @@index([passengerId])
+  @@index([driverId])
+  @@index([status])
+  @@index([requestedAt])
+}
+
+model Bid {
+  id           String   @id @default(uuid())
+
+  rideId       String
+  ride         Ride     @relation(fields: [rideId], references: [id], onDelete: Cascade)
+
+  driverId     String
+  driver       User     @relation(fields: [driverId], references: [id])
+
+  price        Float
+  message      String?
+  estimatedArrival Int?  // Минуты до прибытия
+
+  isAccepted   Boolean  @default(false)
+  isRejected   Boolean  @default(false)
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([rideId, driverId])
+  @@index([rideId])
+  @@index([driverId])
+}
+
+model Payment {
+  id            String        @id @default(uuid())
+
+  rideId        String        @unique
+  ride          Ride          @relation(fields: [rideId], references: [id])
+
+  amount        Float
+  method        PaymentMethod @default(CASH)
+  status        PaymentStatus @default(PENDING)
+
+  transactionId String?
+
+  paidAt        DateTime?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@index([rideId])
+  @@index([status])
+}
+
+model Review {
+  id            String   @id @default(uuid())
+
+  rideId        String   @unique
+  ride          Ride     @relation(fields: [rideId], references: [id])
+
+  reviewerId    String
+  reviewer      User     @relation("ReviewsGiven", fields: [reviewerId], references: [id])
+
+  reviewedId    String
+  reviewed      User     @relation("ReviewsReceived", fields: [reviewedId], references: [id])
+
+  rating        Int      // 1-5
+  comment       String?
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([rideId])
+  @@index([reviewerId])
+  @@index([reviewedId])
+}
