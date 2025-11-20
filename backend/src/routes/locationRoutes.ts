@@ -6,6 +6,7 @@ import {
   deleteSavedLocation
 } from '../controllers/locationController';
 import { protect } from '../middleware/auth';
+import { validate, createLocationSchema, updateLocationSchema, idSchema } from '../utils/validation';
 
 const router = express.Router();
 
@@ -13,8 +14,8 @@ const router = express.Router();
 router.use(protect);
 
 router.get('/', getSavedLocations);
-router.post('/', createSavedLocation);
-router.put('/:id', updateSavedLocation);
-router.delete('/:id', deleteSavedLocation);
+router.post('/', validate(createLocationSchema), createSavedLocation);
+router.put('/:id', validate(idSchema.merge(updateLocationSchema)), updateSavedLocation);
+router.delete('/:id', validate(idSchema), deleteSavedLocation);
 
 export default router;

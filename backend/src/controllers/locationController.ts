@@ -1,120 +1,136 @@
-import { Response, NextFunction } from 'express';
-import { PrismaClient, LocationType } from '@prisma/client';
+import { Response } from 'express';
 import { AuthRequest } from '../middleware/auth';
-
-const prisma = new PrismaClient();
+import prisma from '../utils/prisma';
+import { asyncHandler, UnauthorizedError, NotFoundError } from '../utils/errorHandler';
+import { sanitizeString } from '../utils/validation';
 
 // Получить все избранные адреса пользователя
-export const getSavedLocations = async (req: AuthRequest, res: Response, next: NextFunction) => {
-  try {
-    const userId = req.user?.id;
+export const getSavedLocations = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const userId = req.user?.id;
+  if (!userId) throw new UnauthorizedError();
 
-    const locations = await prisma.savedLocation.findMany({
-      where: { userId },
-      orderBy: { createdAt: 'desc' }
-    });
+  const locations = await prisma.savedLocation.findMany({
+    where: { userId },
+    orderBy: { createdAt: 'desc' }
+  });
 
-    res.json(locations);
-  } catch (error) {
-    next(error);
-  }
-};
+  res.json({
+    success: true,
+    data: locations
+  });
+});
 
 // Создать избранный адрес
-export const createSavedLocation = async (req: AuthRequest, res: Response, next: NextFunction) => {
-  try {
-    const userId = req.user?.id;
-    const { type, name, address, latitude, longitude } = req.body;
+export const createSavedLocation = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const userId = req.user?.id;
+  if (!userId) throw new UnauthorizedError();
 
-    if (!userId) {
-      return res.status(401).json({ message: 'Не авторизован' });
-    }
+  const { type, name, address, latitude, longitude } = req.validatedData;
 
-    // Проверка на существование такого типа адреса
-    const existing = await prisma.savedLocation.findUnique({
-      where: {
-        userId_type: {
-          userId,
-          type
-        }
-      }
-    });
+  // Sanitize строковые поля для защиты от XSS
+  const sanitizedName = sanitizeString(name);
+  const sanitizedAddress = sanitizeString(address);
 
-    if (existing) {
-      // Обновить существующий адрес
-      const updated = await prisma.savedLocation.update({
-        where: { id: existing.id },
-        data: { name, address, latitude, longitude }
-      });
-      return res.json(updated);
-    }
-
-    // Создать новый адрес
-    const location = await prisma.savedLocation.create({
-      data: {
+  // Проверка на существование такого типа адреса
+  const existing = await prisma.savedLocation.findUnique({
+    where: {
+      userId_type: {
         userId,
-        type,
-        name,
-        address,
+        type
+      }
+    }
+  });
+
+  let location;
+
+  if (existing) {
+    // Обновить существующий адрес
+    location = await prisma.savedLocation.update({
+      where: { id: existing.id },
+      data: {
+        name: sanitizedName,
+        address: sanitizedAddress,
         latitude,
         longitude
       }
     });
-
-    res.status(201).json(location);
-  } catch (error) {
-    next(error);
+  } else {
+    // Создать новый адрес
+    location = await prisma.savedLocation.create({
+      data: {
+        userId,
+        type,
+        name: sanitizedName,
+        address: sanitizedAddress,
+        latitude,
+        longitude
+      }
+    });
   }
-};
+
+  res.status(201).json({
+    success: true,
+    data: location
+  });
+});
 
 // Обновить избранный адрес
-export const updateSavedLocation = async (req: AuthRequest, res: Response, next: NextFunction) => {
-  try {
-    const userId = req.user?.id;
-    const { id } = req.params;
-    const { name, address, latitude, longitude } = req.body;
+export const updateSavedLocation = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const userId = req.user?.id;
+  if (!userId) throw new UnauthorizedError();
 
-    // Проверка прав доступа
-    const location = await prisma.savedLocation.findFirst({
-      where: { id, userId }
-    });
+  const { id } = req.params;
+  const updateData = req.validatedData;
 
-    if (!location) {
-      return res.status(404).json({ message: 'Адрес не найден' });
-    }
+  // Проверка прав доступа
+  const location = await prisma.savedLocation.findFirst({
+    where: { id, userId }
+  });
 
-    const updated = await prisma.savedLocation.update({
-      where: { id },
-      data: { name, address, latitude, longitude }
-    });
-
-    res.json(updated);
-  } catch (error) {
-    next(error);
+  if (!location) {
+    throw new NotFoundError('Адрес не найден');
   }
-};
+
+  // Sanitize строковые поля для защиты от XSS
+  const sanitizedData: any = {};
+  if (updateData.name) sanitizedData.name = sanitizeString(updateData.name);
+  if (updateData.address) sanitizedData.address = sanitizeString(updateData.address);
+  if (updateData.latitude) sanitizedData.latitude = updateData.latitude;
+  if (updateData.longitude) sanitizedData.longitude = updateData.longitude;
+
+  const updated = await prisma.savedLocation.update({
+    where: { id },
+    data: sanitizedData
+  });
+
+  res.json({
+    success: true,
+    data: updated
+  });
+});
 
 // Удалить избранный адрес
-export const deleteSavedLocation = async (req: AuthRequest, res: Response, next: NextFunction) => {
-  try {
-    const userId = req.user?.id;
-    const { id } = req.params;
+export const deleteSavedLocation = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const userId = req.user?.id;
+  if (!userId) throw new UnauthorizedError();
 
-    // Проверка прав доступа
-    const location = await prisma.savedLocation.findFirst({
-      where: { id, userId }
-    });
+  const { id } = req.params;
 
-    if (!location) {
-      return res.status(404).json({ message: 'Адрес не найден' });
-    }
+  // Проверка прав доступа
+  const location = await prisma.savedLocation.findFirst({
+    where: { id, userId }
+  });
 
-    await prisma.savedLocation.delete({
-      where: { id }
-    });
-
-    res.json({ message: 'Адрес удален' });
-  } catch (error) {
-    next(error);
+  if (!location) {
+    throw new NotFoundError('Адрес не найден');
   }
-};
+
+  await prisma.savedLocation.delete({
+    where: { id }
+  });
+
+  res.json({
+    success: true,
+    message: 'Адрес удален'
+  });
+});
