@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import authRoutes from './authRoutes';
+import userRoutes from './userRoutes';
 import rideRoutes from './rideRoutes';
 import bidRoutes from './bidRoutes';
 import driverRoutes from './driverRoutes';
@@ -10,11 +11,13 @@ import tipRoutes from './tipRoutes';
 import notificationRoutes from './notificationRoutes';
 import chatRoutes from './chatRoutes';
 import achievementRoutes from './achievementRoutes';
+import adminRoutes from './adminRoutes';
 
 const router = Router();
 
 // Основные роуты
 router.use('/auth', authRoutes);
+router.use('/users', userRoutes);
 router.use('/rides', rideRoutes);
 router.use('/bids', bidRoutes);
 router.use('/drivers', driverRoutes);
@@ -27,6 +30,9 @@ router.use('/tips', tipRoutes);
 router.use('/notifications', notificationRoutes);
 router.use('/chat', chatRoutes);
 router.use('/achievements', achievementRoutes);
+
+// Админ панель
+router.use('/admin', adminRoutes);
 
 // Health check
 router.get('/health', (req, res) => {
