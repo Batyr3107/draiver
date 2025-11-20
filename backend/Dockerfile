@@ -2,12 +2,12 @@ FROM node:18-alpine
 
 WORKDIR /app
 
-# Копируем package файлы
+# Копируем package files
 COPY package*.json ./
 COPY prisma ./prisma/
 
 # Устанавливаем зависимости
-RUN npm install
+RUN npm ci
 
 # Копируем остальные файлы
 COPY . .
@@ -15,11 +15,8 @@ COPY . .
 # Генерируем Prisma Client
 RUN npx prisma generate
 
-# Компилируем TypeScript
-RUN npm run build
-
-# Открываем порт
+# Expose port
 EXPOSE 5000
 
-# Запускаем миграции и приложение
-CMD ["sh", "-c", "npx prisma migrate deploy && npm start"]
+# Start command (для dev используется через docker-compose)
+CMD ["npm", "run", "dev"]

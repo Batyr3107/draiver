@@ -1,21 +1,37 @@
 version: '3.8'
 
 services:
-  # PostgreSQL база данных
+  # PostgreSQL Database
   postgres:
-    image: postgres:14-alpine
-    container_name: draiver-db
-    restart: always
+    image: postgres:15-alpine
+    container_name: draiver-postgres
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
       POSTGRES_DB: draiver
+      POSTGRES_USER: draiver
+      POSTGRES_PASSWORD: draiver123
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    networks:
-      - draiver-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U draiver"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis for caching and queues
+  redis:
+    image: redis:7-alpine
+    container_name: draiver-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
   # Backend API
   backend:
@@ -23,41 +39,41 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: draiver-backend
-    restart: always
     ports:
       - "5000:5000"
     environment:
-      - NODE_ENV=production
-      - PORT=5000
-      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/draiver?schema=public
-      - JWT_SECRET=your-production-secret-change-this
-      - JWT_EXPIRES_IN=7d
-      - FRONTEND_URL=http://localhost:3000
+      - DATABASE_URL=postgresql://draiver:draiver123@postgres:5432/draiver
+      - REDIS_URL=redis://redis:6379
+      - NODE_ENV=development
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
     depends_on:
-      - postgres
-    networks:
-      - draiver-network
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: npm run dev
 
-  # Frontend
+  # Frontend Next.js
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
     container_name: draiver-frontend
-    restart: always
     ports:
       - "3000:3000"
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost:5000/api
       - NEXT_PUBLIC_SOCKET_URL=http://localhost:5000
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
     depends_on:
       - backend
-    networks:
-      - draiver-network
+    command: npm run dev
 
 volumes:
   postgres_data:
-
-networks:
-  draiver-network:
-    driver: bridge
+  redis_data:
