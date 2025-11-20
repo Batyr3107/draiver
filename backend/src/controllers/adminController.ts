@@ -1,4 +1,4 @@
-import { Request, Response, NextFunction } from 'express';
+import { Response, NextFunction } from 'express';
 import prisma from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { AuthRequest } from '../types';
@@ -296,7 +296,8 @@ export const blockUser = async (
 
     loggers.success(
       `User ${isBlocked ? 'blocked' : 'unblocked'}: ${user.firstName} ${user.lastName}`,
-      { adminId: req.user?.id, userId: id }
+      req.user?.id,
+      { userId: id }
     );
 
     res.json({
@@ -374,7 +375,8 @@ export const changeUserRole = async (
 
     loggers.success(
       `User role changed: ${user.firstName} ${user.lastName} -> ${role}`,
-      { adminId: req.user?.id, userId: id }
+      req.user?.id,
+      { userId: id }
     );
 
     res.json({
@@ -479,7 +481,8 @@ export const verifyDriver = async (
 
     loggers.success(
       `Driver ${isVerified ? 'verified' : 'unverified'}: ${driver.user.firstName} ${driver.user.lastName}`,
-      { adminId: req.user?.id, driverId: id }
+      req.user?.id,
+      { driverId: id }
     );
 
     res.json({

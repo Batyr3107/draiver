@@ -38,7 +38,7 @@ export default function AdminDashboard() {
     try {
       // Загрузка статистики
       const statsResponse = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/admin/stats?range=${timeRange}`,
+        `${process.env.NEXT_PUBLIC_API_URL}/admin/stats?timeRange=${timeRange}`,
         {
           headers: {
             Authorization: `Bearer ${localStorage.getItem('token')}`,
