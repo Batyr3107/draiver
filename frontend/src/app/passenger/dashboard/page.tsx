@@ -2,391 +2,461 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useAuthStore } from '../../../store/authStore';
-import { rideAPI, bidAPI } from '../../../services/api';
-import { Ride, Bid, RideStatus } from '../../../types';
-import socketService from '../../../services/socket';
+import { useSocket } from '@/hooks/useSocket';
+import { useRideUpdates } from '@/hooks/useRideUpdates';
+
+interface SavedLocation {
+  id: string;
+  type: string;
+  address: string;
+  latitude: number;
+  longitude: number;
+}
+
+interface User {
+  id: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string;
+  avatar?: string;
+  loyaltyTier: string;
+  loyaltyPoints: number;
+  totalRides: number;
+}
+
+interface RecentRide {
+  id: string;
+  pickupAddress: string;
+  dropoffAddress: string;
+  price: number;
+  status: string;
+  createdAt: string;
+  driver?: {
+    user: {
+      firstName: string;
+      lastName: string;
+      rating: number;
+    };
+  };
+}
 
 export default function PassengerDashboard() {
   const router = useRouter();
-  const { user, isAuthenticated, loadUser } = useAuthStore();
-  const [myRides, setMyRides] = useState<Ride[]>([]);
-  const [selectedRide, setSelectedRide] = useState<Ride | null>(null);
-  const [bids, setBids] = useState<Bid[]>([]);
-  const [showCreateRide, setShowCreateRide] = useState(false);
+  const { socket, isConnected } = useSocket();
+  const [user, setUser] = useState<User | null>(null);
+  const [activeRideId, setActiveRideId] = useState<string | null>(null);
+  const [savedLocations, setSavedLocations] = useState<SavedLocation[]>([]);
+  const [recentRides, setRecentRides] = useState<RecentRide[]>([]);
+  const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [loading, setLoading] = useState(true);
 
-  const [newRide, setNewRide] = useState({
-    pickupAddress: '',
-    pickupLatitude: 51.1694,
-    pickupLongitude: 71.4491, // Астана координаты по умолчанию
-    dropoffAddress: '',
-    dropoffLatitude: 51.1283,
-    dropoffLongitude: 71.4302,
-    suggestedPrice: '',
-    passengerNotes: '',
+  const { ride, driverLocation, bids } = useRideUpdates({
+    socket,
+    rideId: activeRideId,
+    onStatusChange: (status) => {
+      if (status === 'COMPLETED' || status === 'CANCELLED') {
+        setActiveRideId(null);
+        loadRecentRides();
+      }
+    },
+    onNewBid: () => {
+      if (typeof window !== 'undefined' && 'Notification' in window) {
+        new Notification('Новая ставка!', {
+          body: 'Водитель предложил свою цену',
+          icon: '/logo.png'
+        });
+      }
+    }
   });
 
   useEffect(() => {
-    loadUser();
-  }, [loadUser]);
+    loadUserData();
+    loadSavedLocations();
+    loadRecentRides();
+    loadUnreadNotifications();
+    checkActiveRide();
+  }, []);
 
-  useEffect(() => {
-    if (!isAuthenticated) {
-      router.push('/auth/login');
-      return;
-    }
-
-    if (user?.role === 'DRIVER') {
-      router.push('/driver/dashboard');
-      return;
-    }
-
-    loadMyRides();
-    setupWebSocket();
-
-    return () => {
-      socketService.removeAllListeners();
-    };
-  }, [isAuthenticated, user, router]);
-
-  const loadMyRides = async () => {
+  const loadUserData = async () => {
     try {
-      const res = await rideAPI.getMyRides();
-      setMyRides(res.data);
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/users/profile`,
+        {
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('token')}`
+          }
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        setUser(data.data);
+      }
     } catch (error) {
-      console.error('Ошибка загрузки поездок:', error);
+      console.error('Error loading user:', error);
+    }
+  };
+
+  const loadSavedLocations = async () => {
+    try {
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/locations`,
+        {
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('token')}`
+          }
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        setSavedLocations(data.data || []);
+      }
+    } catch (error) {
+      console.error('Error loading locations:', error);
+    }
+  };
+
+  const loadRecentRides = async () => {
+    try {
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/rides/history?limit=5`,
+        {
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('token')}`
+          }
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        setRecentRides(data.data || []);
+      }
+    } catch (error) {
+      console.error('Error loading rides:', error);
     } finally {
       setLoading(false);
     }
   };
 
-  const setupWebSocket = () => {
-    socketService.connect();
-    if (user) {
-      socketService.joinRoom(user.id);
-    }
+  const loadUnreadNotifications = async () => {
+    try {
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/notifications?isRead=false`,
+        {
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('token')}`
+          }
+        }
+      );
 
-    socketService.onNewBid((bid) => {
-      alert('Новое предложение от водителя!');
-      if (selectedRide) {
-        loadBidsForRide(selectedRide.id);
+      if (response.ok) {
+        const data = await response.json();
+        setUnreadNotifications(data.data?.length || 0);
       }
-      loadMyRides();
-    });
-  };
-
-  const handleCreateRide = async (e: React.FormEvent) => {
-    e.preventDefault();
-
-    try {
-      await rideAPI.createRide({
-        ...newRide,
-        suggestedPrice: newRide.suggestedPrice ? parseFloat(newRide.suggestedPrice) : undefined,
-      });
-
-      alert('Заказ создан! Ожидайте предложений от водителей.');
-      setShowCreateRide(false);
-      setNewRide({
-        pickupAddress: '',
-        pickupLatitude: 51.1694,
-        pickupLongitude: 71.4491,
-        dropoffAddress: '',
-        dropoffLatitude: 51.1283,
-        dropoffLongitude: 71.4302,
-        suggestedPrice: '',
-        passengerNotes: '',
-      });
-      loadMyRides();
-    } catch (error: any) {
-      alert(error.response?.data?.error || 'Ошибка создания заказа');
-    }
-  };
-
-  const loadBidsForRide = async (rideId: string) => {
-    try {
-      const res = await bidAPI.getBidsForRide(rideId);
-      setBids(res.data);
     } catch (error) {
-      console.error('Ошибка загрузки предложений:', error);
+      console.error('Error loading notifications:', error);
     }
   };
 
-  const handleSelectRide = async (ride: Ride) => {
-    setSelectedRide(ride);
-    await loadBidsForRide(ride.id);
-  };
-
-  const handleAcceptBid = async (bidId: string) => {
+  const checkActiveRide = async () => {
     try {
-      await bidAPI.acceptBid(bidId);
-      alert('Предложение принято! Водитель скоро свяжется с вами.');
-      setSelectedRide(null);
-      setBids([]);
-      loadMyRides();
-    } catch (error: any) {
-      alert(error.response?.data?.error || 'Ошибка принятия предложения');
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/rides/active`,
+        {
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('token')}`
+          }
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.data) {
+          setActiveRideId(data.data.id);
+        }
+      }
+    } catch (error) {
+      console.error('Error checking active ride:', error);
     }
   };
 
-  const handleCancelRide = async (rideId: string) => {
-    if (!confirm('Вы уверены, что хотите отменить поездку?')) {
-      return;
-    }
+  const quickBookRide = (location: SavedLocation) => {
+    router.push(`/ride?dropoff=${encodeURIComponent(location.address)}`);
+  };
 
-    try {
-      await rideAPI.cancelRide(rideId);
-      alert('Поездка отменена');
-      loadMyRides();
-    } catch (error: any) {
-      alert(error.response?.data?.error || 'Ошибка отмены поездки');
+  const getLoyaltyColor = (tier: string) => {
+    switch (tier) {
+      case 'PLATINUM': return 'bg-gradient-to-r from-gray-300 to-gray-500';
+      case 'GOLD': return 'bg-gradient-to-r from-yellow-300 to-yellow-500';
+      case 'SILVER': return 'bg-gradient-to-r from-gray-200 to-gray-400';
+      default: return 'bg-gradient-to-r from-orange-300 to-orange-500';
     }
+  };
+
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'COMPLETED': return 'text-green-600';
+      case 'CANCELLED': return 'text-red-600';
+      case 'IN_PROGRESS': return 'text-blue-600';
+      default: return 'text-yellow-600';
+    }
+  };
+
+  const getStatusText = (status: string) => {
+    const statuses: Record<string, string> = {
+      'PENDING': 'Ожидание',
+      'ACCEPTED': 'Принято',
+      'IN_PROGRESS': 'В пути',
+      'COMPLETED': 'Завершено',
+      'CANCELLED': 'Отменено'
+    };
+    return statuses[status] || status;
   };
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <p>Загрузка...</p>
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-cyan-50">
+        <div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-blue-500"></div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white shadow">
-        <div className="max-w-7xl mx-auto px-4 py-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center">
-            <h1 className="text-2xl font-bold text-gray-900">
-              Панель пассажира
-            </h1>
-            <div className="flex items-center gap-4">
-              <button
-                onClick={() => setShowCreateRide(!showCreateRide)}
-                className="btn btn-primary"
-              >
-                + Новый заказ
-              </button>
-              <span className="text-gray-600">
-                {user?.firstName} {user?.lastName}
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-cyan-50 p-4">
+      <div className="max-w-6xl mx-auto">
+        {/* Header */}
+        <div className="mb-6">
+          <h1 className="text-3xl font-bold text-gray-800">
+            Привет, {user?.firstName}! 👋
+          </h1>
+          <p className="text-gray-600 mt-1">Готовы к новой поездке?</p>
+        </div>
+
+        {/* Connection Status */}
+        <div className="mb-4 flex items-center gap-2">
+          <div className={`h-3 w-3 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`}></div>
+          <span className="text-sm text-gray-600">
+            {isConnected ? 'Подключено' : 'Отключено'}
+          </span>
+        </div>
+
+        {/* Active Ride */}
+        {ride && (
+          <div className="bg-white rounded-2xl shadow-lg p-6 mb-6 border-2 border-blue-500">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-bold text-gray-800">🚗 Активная поездка</h2>
+              <span className={`px-3 py-1 rounded-full text-sm font-semibold ${getStatusColor(ride.status)}`}>
+                {getStatusText(ride.status)}
               </span>
             </div>
-          </div>
-        </div>
-      </header>
 
-      <main className="max-w-7xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
-        {/* Форма создания заказа */}
-        {showCreateRide && (
-          <div className="card mb-8">
-            <h2 className="text-xl font-bold mb-4">Новый заказ</h2>
-            <form onSubmit={handleCreateRide} className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium mb-2">
-                    Адрес подачи
-                  </label>
-                  <input
-                    type="text"
-                    value={newRide.pickupAddress}
-                    onChange={(e) =>
-                      setNewRide({ ...newRide, pickupAddress: e.target.value })
-                    }
-                    className="input"
-                    placeholder="ул. Абая, 10"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium mb-2">
-                    Адрес назначения
-                  </label>
-                  <input
-                    type="text"
-                    value={newRide.dropoffAddress}
-                    onChange={(e) =>
-                      setNewRide({ ...newRide, dropoffAddress: e.target.value })
-                    }
-                    className="input"
-                    placeholder="пр. Республики, 25"
-                    required
-                  />
+            <div className="space-y-3">
+              <div className="flex items-start gap-3">
+                <span className="text-blue-500 font-bold">A</span>
+                <div className="flex-1">
+                  <p className="text-sm text-gray-500">Откуда</p>
+                  <p className="font-medium">{ride.pickupAddress}</p>
                 </div>
               </div>
 
-              <div>
-                <label className="block text-sm font-medium mb-2">
-                  Предложенная цена (необязательно)
-                </label>
-                <input
-                  type="number"
-                  value={newRide.suggestedPrice}
-                  onChange={(e) =>
-                    setNewRide({ ...newRide, suggestedPrice: e.target.value })
-                  }
-                  className="input"
-                  placeholder="1000"
-                />
+              <div className="flex items-start gap-3">
+                <span className="text-cyan-500 font-bold">B</span>
+                <div className="flex-1">
+                  <p className="text-sm text-gray-500">Куда</p>
+                  <p className="font-medium">{ride.dropoffAddress}</p>
+                </div>
               </div>
 
-              <div>
-                <label className="block text-sm font-medium mb-2">
-                  Примечание (необязательно)
-                </label>
-                <textarea
-                  value={newRide.passengerNotes}
-                  onChange={(e) =>
-                    setNewRide({ ...newRide, passengerNotes: e.target.value })
-                  }
-                  className="input"
-                  rows={3}
-                  placeholder="Дополнительная информация..."
-                />
-              </div>
+              {ride.driver && (
+                <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg mt-4">
+                  <div className="w-12 h-12 bg-gradient-to-br from-blue-400 to-cyan-400 rounded-full flex items-center justify-center text-white font-bold text-lg">
+                    {ride.driver.user.firstName[0]}
+                  </div>
+                  <div className="flex-1">
+                    <p className="font-semibold">{ride.driver.user.firstName} {ride.driver.user.lastName}</p>
+                    <p className="text-sm text-gray-600">
+                      {ride.driver.vehicleMake} {ride.driver.vehicleModel} • {ride.driver.vehicleNumber}
+                    </p>
+                    <div className="flex items-center gap-1 mt-1">
+                      <span className="text-yellow-500">⭐</span>
+                      <span className="text-sm font-medium">{ride.driver.user.rating.toFixed(1)}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
 
-              <div className="flex gap-2">
-                <button type="submit" className="btn btn-primary">
-                  Создать заказ
+              {bids.length > 0 && (
+                <div className="mt-4">
+                  <p className="text-sm font-semibold text-gray-700 mb-2">
+                    Предложения водителей ({bids.length})
+                  </p>
+                  <div className="space-y-2 max-h-40 overflow-y-auto">
+                    {bids.map((bid) => (
+                      <div key={bid.id} className="flex items-center justify-between p-2 bg-blue-50 rounded-lg">
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 bg-blue-400 rounded-full flex items-center justify-center text-white text-sm font-bold">
+                            {bid.driver.user.firstName[0]}
+                          </div>
+                          <div>
+                            <p className="text-sm font-medium">{bid.driver.user.firstName}</p>
+                            <p className="text-xs text-gray-600">⭐ {bid.driver.user.rating.toFixed(1)}</p>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <p className="font-bold text-blue-600">{bid.proposedPrice}₸</p>
+                          <p className="text-xs text-gray-600">{bid.estimatedArrival} мин</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="flex gap-3 mt-4">
+                <button
+                  onClick={() => router.push(`/rides/${ride.id}`)}
+                  className="flex-1 bg-blue-500 text-white px-4 py-3 rounded-lg font-semibold hover:bg-blue-600 transition"
+                >
+                  Подробнее
                 </button>
                 <button
-                  type="button"
-                  onClick={() => setShowCreateRide(false)}
-                  className="btn btn-secondary"
+                  onClick={() => router.push(`/rides/${ride.id}/chat`)}
+                  className="px-4 py-3 bg-gray-100 text-gray-700 rounded-lg font-semibold hover:bg-gray-200 transition"
                 >
-                  Отмена
+                  💬 Чат
                 </button>
               </div>
-            </form>
+            </div>
           </div>
         )}
 
-        {/* Мои поездки */}
-        <div className="card">
-          <h2 className="text-xl font-bold mb-4">Мои поездки</h2>
-          {myRides.length > 0 ? (
-            <div className="space-y-4">
-              {myRides.map((ride) => (
-                <div key={ride.id} className="border rounded-lg p-4">
-                  <div className="flex justify-between items-start">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* Quick Booking */}
+          <div className="bg-white rounded-2xl shadow-lg p-6">
+            <h2 className="text-xl font-bold text-gray-800 mb-4">⚡ Быстрый заказ</h2>
+
+            <button
+              onClick={() => router.push('/ride')}
+              className="w-full bg-gradient-to-r from-blue-500 to-cyan-500 text-white px-6 py-4 rounded-xl font-semibold text-lg hover:shadow-lg transition mb-4"
+            >
+              🚕 Новая поездка
+            </button>
+
+            {savedLocations.length > 0 ? (
+              <div className="space-y-2">
+                <p className="text-sm text-gray-600 mb-2">Сохраненные места:</p>
+                {savedLocations.slice(0, 3).map((location) => (
+                  <button
+                    key={location.id}
+                    onClick={() => quickBookRide(location)}
+                    className="w-full flex items-center gap-3 p-3 bg-gray-50 rounded-lg hover:bg-blue-50 transition text-left"
+                  >
+                    <span className="text-2xl">
+                      {location.type === 'HOME' ? '🏠' : location.type === 'WORK' ? '💼' : '⭐'}
+                    </span>
                     <div className="flex-1">
-                      <p className="font-medium">
-                        {ride.pickupAddress} → {ride.dropoffAddress}
+                      <p className="font-medium text-gray-800">
+                        {location.type === 'HOME' ? 'Дом' : location.type === 'WORK' ? 'Работа' : 'Избранное'}
                       </p>
-                      <p className="text-sm text-gray-600">
-                        Статус: {ride.status}
-                      </p>
-                      <p className="text-sm text-gray-600">
-                        {ride.status === RideStatus.REQUESTED || ride.status === RideStatus.BIDDING
-                          ? `Предложенная цена: ${ride.suggestedPrice} ₸`
-                          : `Цена: ${ride.finalPrice} ₸`}
-                      </p>
-                      {ride.bids && ride.bids.length > 0 && (
-                        <p className="text-sm text-primary-600 mt-1">
-                          Предложений: {ride.bids.length}
-                        </p>
-                      )}
+                      <p className="text-sm text-gray-600 truncate">{location.address}</p>
                     </div>
-                    <div className="flex gap-2">
-                      {(ride.status === RideStatus.REQUESTED || ride.status === RideStatus.BIDDING) && (
-                        <>
-                          <button
-                            onClick={() => handleSelectRide(ride)}
-                            className="btn btn-primary"
-                          >
-                            Посмотреть предложения
-                          </button>
-                          <button
-                            onClick={() => handleCancelRide(ride.id)}
-                            className="btn btn-danger"
-                          >
-                            Отменить
-                          </button>
-                        </>
-                      )}
-                    </div>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-gray-500 text-center py-4">
+                Нет сохраненных мест
+              </p>
+            )}
+          </div>
+
+          {/* Loyalty Card */}
+          <div className={`${getLoyaltyColor(user?.loyaltyTier || 'BRONZE')} rounded-2xl shadow-lg p-6 text-white`}>
+            <h2 className="text-xl font-bold mb-2">💎 {user?.loyaltyTier || 'BRONZE'}</h2>
+            <p className="text-sm opacity-90 mb-4">Программа лояльности</p>
+
+            <div className="bg-white bg-opacity-20 rounded-lg p-4 mb-4">
+              <div className="flex justify-between items-center mb-2">
+                <span className="text-sm">Баллы</span>
+                <span className="text-2xl font-bold">{user?.loyaltyPoints || 0}</span>
+              </div>
+              <div className="w-full bg-white bg-opacity-30 rounded-full h-2">
+                <div
+                  className="bg-white h-2 rounded-full transition-all"
+                  style={{ width: `${Math.min((user?.loyaltyPoints || 0) / 1000 * 100, 100)}%` }}
+                ></div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm opacity-90">Всего поездок</p>
+                <p className="text-3xl font-bold">{user?.totalRides || 0}</p>
+              </div>
+              <button
+                onClick={() => router.push('/achievements')}
+                className="bg-white bg-opacity-20 px-4 py-2 rounded-lg hover:bg-opacity-30 transition"
+              >
+                🏆 Достижения
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Recent Rides */}
+        <div className="bg-white rounded-2xl shadow-lg p-6 mt-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-bold text-gray-800">📋 Недавние поездки</h2>
+            <button
+              onClick={() => router.push('/rides/history')}
+              className="text-blue-500 hover:text-blue-600 font-medium text-sm"
+            >
+              Все →
+            </button>
+          </div>
+
+          {recentRides.length > 0 ? (
+            <div className="space-y-3">
+              {recentRides.map((ride) => (
+                <div
+                  key={ride.id}
+                  onClick={() => router.push(`/rides/${ride.id}`)}
+                  className="flex items-center justify-between p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition cursor-pointer"
+                >
+                  <div className="flex-1">
+                    <p className="font-medium text-gray-800 truncate">{ride.dropoffAddress}</p>
+                    <p className="text-sm text-gray-600 truncate">{ride.pickupAddress}</p>
+                    <p className="text-xs text-gray-500 mt-1">
+                      {new Date(ride.createdAt).toLocaleDateString('ru-RU')}
+                    </p>
+                  </div>
+                  <div className="text-right ml-4">
+                    <p className="font-bold text-gray-800">{ride.price}₸</p>
+                    <p className={`text-sm ${getStatusColor(ride.status)}`}>
+                      {getStatusText(ride.status)}
+                    </p>
                   </div>
                 </div>
               ))}
             </div>
           ) : (
-            <p className="text-gray-600">У вас пока нет поездок</p>
+            <p className="text-center text-gray-500 py-8">Нет поездок</p>
           )}
         </div>
 
-        {/* Модальное окно с предложениями */}
-        {selectedRide && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-            <div className="bg-white rounded-lg max-w-2xl w-full max-h-[80vh] overflow-y-auto p-6">
-              <div className="flex justify-between items-start mb-4">
-                <h2 className="text-xl font-bold">
-                  Предложения для поездки
-                </h2>
-                <button
-                  onClick={() => {
-                    setSelectedRide(null);
-                    setBids([]);
-                  }}
-                  className="text-gray-500 hover:text-gray-700"
-                >
-                  ✕
-                </button>
-              </div>
-
-              <div className="mb-4 p-4 bg-gray-100 rounded">
-                <p className="font-medium">
-                  {selectedRide.pickupAddress} → {selectedRide.dropoffAddress}
-                </p>
-                <p className="text-sm text-gray-600">
-                  Ваша предложенная цена: {selectedRide.suggestedPrice} ₸
-                </p>
-              </div>
-
-              {bids.length > 0 ? (
-                <div className="space-y-3">
-                  {bids.map((bid) => (
-                    <div key={bid.id} className="border rounded-lg p-4">
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <p className="font-medium">
-                            {bid.driver?.firstName} {bid.driver?.lastName}
-                          </p>
-                          <p className="text-sm text-gray-600">
-                            Рейтинг: {bid.driver?.rating || 5}⭐
-                          </p>
-                          {bid.driver?.driverProfile && (
-                            <p className="text-sm text-gray-600">
-                              {bid.driver.driverProfile.vehicleBrand}{' '}
-                              {bid.driver.driverProfile.vehicleModel} (
-                              {bid.driver.driverProfile.vehiclePlate})
-                            </p>
-                          )}
-                          <p className="text-lg font-bold text-primary-600 mt-2">
-                            {bid.price} ₸
-                          </p>
-                          {bid.message && (
-                            <p className="text-sm text-gray-600 mt-1">
-                              {bid.message}
-                            </p>
-                          )}
-                        </div>
-                        <button
-                          onClick={() => handleAcceptBid(bid.id)}
-                          className="btn btn-primary"
-                        >
-                          Принять
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-gray-600 text-center py-8">
-                  Пока нет предложений от водителей
-                </p>
-              )}
-            </div>
-          </div>
+        {/* Notifications Badge */}
+        {unreadNotifications > 0 && (
+          <button
+            onClick={() => router.push('/notifications')}
+            className="fixed bottom-6 right-6 bg-red-500 text-white px-6 py-3 rounded-full shadow-lg hover:bg-red-600 transition flex items-center gap-2"
+          >
+            <span>🔔</span>
+            <span className="font-semibold">{unreadNotifications}</span>
+          </button>
         )}
-      </main>
+      </div>
     </div>
   );
 }

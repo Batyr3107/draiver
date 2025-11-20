@@ -1,74 +1,62 @@
 import express from 'express';
-import cors from 'cors';
 import { createServer } from 'http';
-import { Server } from 'socket.io';
 import { config } from './config';
 import routes from './routes';
-import { errorHandler } from './middleware/errorHandler';
+import {
+  helmetConfig,
+  corsConfig,
+  rateLimiter,
+  securityHeaders,
+  requestLogger,
+  jsonSizeLimit,
+  urlEncodedSizeLimit
+} from './middleware/security';
+import { initializeWebSocket } from './websocket/socket';
 
 const app = express();
 const httpServer = createServer(app);
 
-// Настройка Socket.IO
-const io = new Server(httpServer, {
-  cors: {
-    origin: config.frontendUrl,
-    methods: ['GET', 'POST'],
-  },
+// Security Middleware
+app.use(securityHeaders);
+app.use(helmetConfig);
+app.use(corsConfig);
+app.use(requestLogger);
+
+// Применяем rate limiting ко всем роутам кроме health check
+app.use((req, res, next) => {
+  if (req.path === '/api/health') {
+    return next();
+  }
+  rateLimiter(req, res, next);
 });
 
-// Middleware
-app.use(cors({
-  origin: config.frontendUrl,
-  credentials: true,
-}));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// Body parsing
+app.use(express.json({ limit: jsonSizeLimit }));
+app.use(express.urlencoded({ extended: true, limit: urlEncodedSizeLimit }));
 
-// Routes
+// API Routes
 app.use('/api', routes);
 
-// Error handler
-app.use(errorHandler);
-
-// WebSocket соединения
-io.on('connection', (socket) => {
-  console.log('Новое WebSocket соединение:', socket.id);
-
-  // Присоединение к комнате пользователя
-  socket.on('join', (userId: string) => {
-    socket.join(userId);
-    console.log(`Пользователь ${userId} присоединился к комнате`);
-  });
-
-  // Отправка местоположения водителя
-  socket.on('driverLocation', (data) => {
-    const { rideId, latitude, longitude } = data;
-    io.to(rideId).emit('driverLocationUpdate', { latitude, longitude });
-  });
-
-  // Обновление статуса поездки
-  socket.on('rideStatusUpdate', (data) => {
-    const { rideId, status } = data;
-    io.to(rideId).emit('rideStatusChanged', { status });
-  });
-
-  // Новое предложение от водителя
-  socket.on('newBid', (data) => {
-    const { passengerId, bid } = data;
-    io.to(passengerId).emit('bidReceived', bid);
-  });
-
-  // Принятие предложения
-  socket.on('bidAccepted', (data) => {
-    const { driverId, ride } = data;
-    io.to(driverId).emit('bidAcceptedNotification', ride);
-  });
-
-  socket.on('disconnect', () => {
-    console.log('WebSocket соединение закрыто:', socket.id);
+// Health check (без rate limiting)
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+    environment: config.nodeEnv
   });
 });
+
+// 404 handler
+app.use('*', (req, res) => {
+  res.status(404).json({
+    success: false,
+    message: 'Endpoint не найден'
+  });
+});
+
+// Initialize WebSocket
+const io = initializeWebSocket(httpServer);
 
 // Экспорт io для использования в контроллерах
 export { io };
@@ -77,9 +65,31 @@ export { io };
 const PORT = config.port;
 
 httpServer.listen(PORT, () => {
-  console.log(`🚗 Draiver API запущен на порту ${PORT}`);
-  console.log(`📡 WebSocket сервер работает`);
-  console.log(`🌍 Окружение: ${config.nodeEnv}`);
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  console.log('🚗 Draiver API Server');
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  console.log(`📡 HTTP Server: http://localhost:${PORT}`);
+  console.log(`🔌 WebSocket Server: ws://localhost:${PORT}`);
+  console.log(`🌍 Environment: ${config.nodeEnv}`);
+  console.log(`🛡️  Security: Enabled (Helmet, CORS, Rate Limiting)`);
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('🛑 SIGTERM signal received: closing HTTP server');
+  httpServer.close(() => {
+    console.log('✅ HTTP server closed');
+    process.exit(0);
+  });
+});
+
+process.on('SIGINT', () => {
+  console.log('🛑 SIGINT signal received: closing HTTP server');
+  httpServer.close(() => {
+    console.log('✅ HTTP server closed');
+    process.exit(0);
+  });
 });
 
 export default app;
