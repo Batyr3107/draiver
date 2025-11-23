@@ -1,5 +1,6 @@
 import express from 'express';
 import { createServer } from 'http';
+import path from 'path';
 import { config } from './config';
 import routes from './routes';
 import {
@@ -12,9 +13,13 @@ import {
   urlEncodedSizeLimit
 } from './middleware/security';
 import { initializeWebSocket } from './websocket/socket';
+import { ensureUploadDirs } from './services/imageService';
 
 const app = express();
 const httpServer = createServer(app);
+
+// Ensure upload directories exist
+ensureUploadDirs().catch(console.error);
 
 // Security Middleware
 app.use(securityHeaders);
@@ -33,6 +38,9 @@ app.use((req, res, next) => {
 // Body parsing
 app.use(express.json({ limit: jsonSizeLimit }));
 app.use(express.urlencoded({ extended: true, limit: urlEncodedSizeLimit }));
+
+// Serve static files from uploads directory
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // API Routes
 app.use('/api', routes);
