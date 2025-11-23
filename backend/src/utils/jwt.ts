@@ -2,9 +2,9 @@ import jwt from 'jsonwebtoken';
 import { config } from '../config';
 import { AuthUser } from '../types';
 
-export const generateToken = (user: AuthUser): string => {
+export const generateToken = (user: AuthUser, expiresIn?: string): string => {
   return jwt.sign(user, config.jwtSecret, {
-    expiresIn: config.jwtExpiresIn,
+    expiresIn: expiresIn || config.jwtExpiresIn,
   });
 };
 

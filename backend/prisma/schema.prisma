@@ -90,6 +90,7 @@ model User {
   avatar        String?
   rating        Float?   @default(5.0)
   totalRides    Int      @default(0)
+  isBlocked     Boolean  @default(false)
 
   // Премиум функции
   loyaltyTier   LoyaltyTier @default(BRONZE)
@@ -97,6 +98,9 @@ model User {
   referralCode  String      @unique @default(cuid())
   referredById  String?
   referredBy    User?       @relation("Referrals", fields: [referredById], references: [id])
+
+  // Soft delete
+  deletedAt     DateTime?
 
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
@@ -115,11 +119,15 @@ model User {
   notifications     Notification[]
   sentMessages      Message[]         @relation("SentMessages")
   receivedMessages  Message[]         @relation("ReceivedMessages")
+  refreshTokens     RefreshToken[]
 
   @@index([phoneNumber])
   @@index([email])
   @@index([referralCode])
   @@index([loyaltyTier])
+  @@index([role, isBlocked])
+  @@index([createdAt])
+  @@index([deletedAt])
 }
 
 model DriverProfile {
@@ -127,18 +135,21 @@ model DriverProfile {
   userId            String   @unique
   user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  vehicleType       String   @default("ECONOMY") // ECONOMY, COMFORT, BUSINESS, VAN
   licenseNumber     String   @unique
-  vehicleBrand      String
-  vehicleModel      String
+  vehicleBrand      String   @default("")
+  vehicleModel      String   @default("")
   vehicleYear       Int
-  vehicleColor      String
-  vehiclePlate      String   @unique
+  vehicleColor      String   @default("")
+  vehiclePlate      String   @unique @default("")
   vehiclePhoto      String?
 
   isAvailable       Boolean  @default(false)
   isVerified        Boolean  @default(false)
   currentLatitude   Float?
   currentLongitude  Float?
+
+  totalEarnings     Float    @default(0)
 
   rides             Ride[]   @relation("DriverRides")
 
@@ -147,6 +158,8 @@ model DriverProfile {
 
   @@index([userId])
   @@index([isAvailable])
+  @@index([isVerified, isAvailable])
+  @@index([currentLatitude, currentLongitude])
 }
 
 model Ride {
@@ -205,6 +218,10 @@ model Ride {
   @@index([status])
   @@index([requestedAt])
   @@index([scheduledFor])
+  @@index([passengerId, status])
+  @@index([driverId, status])
+  @@index([status, requestedAt])
+  @@index([status, createdAt])
 }
 
 model Bid {
@@ -318,6 +335,7 @@ model PromoCode {
 
   @@index([code])
   @@index([validFrom, validUntil])
+  @@index([isActive, validFrom, validUntil])
 }
 
 model PromoCodeUsage {
@@ -428,4 +446,25 @@ model Message {
   @@index([senderId])
   @@index([receiverId])
   @@index([createdAt])
+}
+
+// 🔑 Refresh Tokens для безопасной авторизации
+model RefreshToken {
+  id           String   @id @default(uuid())
+
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  token        String   @unique
+
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  // IP и User Agent для безопасности
+  ipAddress    String?
+  userAgent    String?
+
+  @@index([userId])
+  @@index([token])
+  @@index([expiresAt])
 }
